@@ -1,0 +1,148 @@
+sonarqube-ansible/
+├── inventory.ini
+├── playbook.yml
+└── roles/
+    ├── java/
+    ├── postgresql/
+    └── sonarqube/
+[sonarqube]
+your.target.host ansible_user=your_user ansible_ssh_pass=your_password
+
+- name: Install SonarQube Stack
+  hosts: sonarqube
+  become: true
+  roles:
+    - java
+    - postgresql
+    - sonarqube
+
+- name: Install OpenJDK 17
+  apt:
+    name: openjdk-17-jdk
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Install OpenJDK 17
+  yum:
+    name: java-17-openjdk
+    state: present
+  when: ansible_os_family == 'RedHat'
+- name: Install PostgreSQL
+  apt:
+    name:
+      - postgresql
+      - postgresql-contrib
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Install PostgreSQL
+  yum:
+    name: postgresql-server
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Ensure PostgreSQL is started
+  service:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Set up SonarQube DB and user
+  become_user: postgres
+  vars:
+    db_name: sonarqube
+    db_user: sonar
+    db_pass: sonar123
+  block:
+    - name: Create database
+      postgresql_db:
+        name: "{{ db_name }}"
+
+    - name: Create user
+      postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_pass }}"
+
+    - name: Grant privileges
+      postgresql_privs:
+        db: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        type: database
+        privs: ALL
+- name: Add SonarQube group
+  group:
+    name: sonarqube
+    state: present
+
+- name: Add SonarQube user
+  user:
+    name: sonarqube
+    group: sonarqube
+    shell: /bin/bash
+    create_home: yes
+
+- name: Download SonarQube
+  get_url:
+    url: https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-10.5.1.90531.zip
+    dest: /opt/sonarqube.zip
+
+- name: Unzip SonarQube
+  unarchive:
+    src: /opt/sonarqube.zip
+    dest: /opt/
+    remote_src: yes
+
+- name: Create symlink to SonarQube
+  file:
+    src: /opt/sonarqube-10.5.1.90531
+    dest: /opt/sonarqube
+    state: link
+
+- name: Change ownership
+  file:
+    path: /opt/sonarqube
+    state: directory
+    recurse: yes
+    owner: sonarqube
+    group: sonarqube
+
+- name: Configure DB credentials in sonar.properties
+  lineinfile:
+    path: /opt/sonarqube/conf/sonar.properties
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^#sonar.jdbc.username=', line: 'sonar.jdbc.username=sonar' }
+    - { regexp: '^#sonar.jdbc.password=', line: 'sonar.jdbc.password=sonar123' }
+    - { regexp: '^#sonar.jdbc.url=', line: 'sonar.jdbc.url=jdbc:postgresql://localhost/sonarqube' }
+
+- name: Create SonarQube systemd service
+  copy:
+    dest: /etc/systemd/system/sonarqube.service
+    content: |
+      [Unit]
+      Description=SonarQube service
+      After=syslog.target network.target
+
+      [Service]
+      Type=forking
+      ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start
+      ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop
+      User=sonarqube
+      Group=sonarqube
+      Restart=always
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: true
+
+- name: Start SonarQube
+  systemd:
+    name: sonarqube
+    state: started
+    enabled: true
+ansible-playbook -i inventory.ini playbook.yml
