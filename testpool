@@ -1,0 +1,61 @@
+# Load Horizon PowerCLI Module
+Import-Module VMware.VimAutomation.HorizonView
+
+# --- CONFIGURATION VARIABLES ---
+$hvServer = "your-horizon-conn-server"   # Horizon Connection Server FQDN
+$hvUser = "DOMAIN\\admin"                # Horizon admin user
+$hvPassword = "yourSecurePassword"
+
+$poolId = "ENGPOOL01"
+$displayName = "Engineering Pool"
+$description = "Automated pool for engineering team"
+$vmNamingPattern = "eng-vdi-{n:fixed=3}"
+
+# vCenter Settings
+$vcenter = "vcenter.domain.local"
+$parentVM = "Horizon_GoldenImages/Win11-Template"
+$snapshot = "BaseSnapshot"
+$resourcePoolPath = "Cluster1/Resources/VDI"
+$hostOrCluster = "Cluster1"
+$datastore = "datastore1"
+$vmFolder = "Horizon-VDIs"
+
+# Provisioning Settings
+$maxVMs = 10
+$minVMs = 2
+$headroom = 1
+$enableProvisioning = $true
+
+# --- CONNECT TO HORIZON ---
+$securePassword = ConvertTo-SecureString $hvPassword -AsPlainText -Force
+$hvCred = New-Object System.Management.Automation.PSCredential($hvUser, $securePassword)
+
+Connect-HVServer -Server $hvServer -Credential $hvCred
+
+# --- BUILD THE POOL SPEC ---
+$poolSpec = New-HVPoolAutomated -Id $poolId `
+    -DisplayName $displayName `
+    -Description $description `
+    -VmNamingPattern $vmNamingPattern `
+    -ParentVMPath $parentVM `
+    -SnapshotPath "$parentVM/$snapshot" `
+    -DesktopPoolType "AUTOMATED" `
+    -EnableProvisioning $enableProvisioning `
+    -MaxNumberOfMachines $maxVMs `
+    -MinNumberOfMachines $minVMs `
+    -HeadroomCount $headroom `
+    -ResourcePoolPath $resourcePoolPath `
+    -HostOrClusterPath $hostOrCluster `
+    -DatastorePaths @($datastore) `
+    -VmFolderPath $vmFolder `
+    -DefaultProtocol "BLAST"
+
+# --- CREATE THE POOL ---
+New-HVPool -Pool $poolSpec
+
+# --- VERIFY ---
+$createdPool = Get-HVPool -PoolId $poolId
+Write-Output "`n✅ Pool '$($createdPool.Id)' created successfully with display name '$($createdPool.DisplayName)'."
+
+# --- DISCONNECT ---
+Disconnect-HVServer
