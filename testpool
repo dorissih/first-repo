@@ -166,3 +166,53 @@ Write-Output "`n✅ Pool '$($createdPool.Id)' created successfully with display 
 # Disconnect from Horizon
 Disconnect-HVServer
 
+
+#new new
+
+# Load Omnissa Horizon Module
+Import-Module Omnissa.VimAutomation.HorizonView
+
+# Ignore cert issues (optional for self-signed certs)
+Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
+
+# Get credentials and connect
+$cred = Get-Credential
+Connect-HVServer -Server "horizon01.domain.local" -Credential $cred
+
+# Access View API services
+$hvServices = (Get-HVServer).ExtensionData
+$desktopPoolService = $hvServices.DesktopPool
+
+# Create a new Automated Pool Spec object
+$desktopPoolSpec = $desktopPoolService.CreateDesktopSpec()
+
+# ─── Basic Pool Info ────────────────────────────────
+$desktopPoolSpec.Id = "ENGPOOL01"
+$desktopPoolSpec.DisplayName = "Engineering Pool"
+$desktopPoolSpec.Description = "Automated pool for engineering"
+$desktopPoolSpec.AutomatedDesktopData.VirtualCenter = "vcenter01.domain.local"
+$desktopPoolSpec.Type = "AUTOMATED"
+
+# ─── Provisioning Settings ──────────────────────────
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.VirtualCenter = "vcenter01.domain.local"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.ParentVmPath = "Cluster/GoldenImages/Win11-Template"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.SnapshotPath = "Cluster/GoldenImages/Win11-Template/Snapshot1"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.HostOrClusterPath = "Cluster"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.ResourcePoolPath = "Cluster/Resources/VDI"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.VmFolderPath = "VDI-Desktops"
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.DatastorePaths = @("datastore1")
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.EnableProvisioning = $true
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.MaxNumberOfMachines = 10
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.MinNumberOfMachines = 2
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.HeadroomCount = 1
+$desktopPoolSpec.AutomatedDesktopData.ProvisioningSettings.NamingSpec.PatternNamingSettings.NamingPattern = "eng-vdi-{n:fixed=3}"
+
+# ─── Protocol & Session Settings (Optional) ─────────
+$desktopPoolSpec.AutomatedDesktopData.ViewComposerData.DisplayProtocolSettings.DefaultDisplayProtocol = "BLAST"
+$desktopPoolSpec.AutomatedDesktopData.ViewComposerData.DisplayProtocolSettings.AllowUserToChooseProtocol = $true
+
+# ─── Create the Desktop Pool ────────────────────────
+$desktopPoolService.Create($desktopPoolSpec)
+
+Write-Host "`n✅ Pool creation submitted successfully."
+
