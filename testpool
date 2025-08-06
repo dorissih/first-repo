@@ -59,3 +59,49 @@ Write-Output "`n✅ Pool '$($createdPool.Id)' created successfully with display 
 
 # --- DISCONNECT ---
 Disconnect-HVServer
+
+
+
+newcode
+
+# Get Horizon server connection
+$cred = Get-Credential
+Connect-HVServer -Server "your-conn-server.domain.local" -Credential $cred
+
+# Create the Automated Pool object
+$pool = New-Object Omnissa.Hv.DesktopPoolAutomated
+
+$pool.Id = "ENGPOOL01"
+$pool.DisplayName = "Engineering Pool"
+$pool.Description = "Automated pool for engineers"
+$pool.Type = "AUTOMATED"
+
+# Create and set ProvisioningSettings sub-object
+$provisioningSettings = New-Object Omnissa.Hv.DesktopPoolProvisioningSettings
+$provisioningSettings.VirtualCenter = "vcenter.domain.local"
+$provisioningSettings.ParentVmPath = "Cluster/GoldenImages/Win11"
+$provisioningSettings.SnapshotPath = "Cluster/GoldenImages/Win11/Snapshot1"
+$provisioningSettings.HostOrClusterPath = "Cluster"
+$provisioningSettings.ResourcePoolPath = "Cluster/Resources/VDI"
+$provisioningSettings.VmFolderPath = "Horizon-VDIs"
+$provisioningSettings.DatastorePaths = @("datastore1")
+$provisioningSettings.EnableProvisioning = $true
+$provisioningSettings.MaxNumberOfMachines = 10
+$provisioningSettings.MinNumberOfMachines = 2
+$provisioningSettings.HeadroomCount = 1
+$provisioningSettings.VmNamingPattern = "eng-vdi-{n:fixed=3}"
+
+# Attach to main pool object
+$pool.ProvisioningSettings = $provisioningSettings
+
+# Optional: Set session and protocol settings
+$pool.DefaultProtocol = "BLAST"
+$pool.AllowProtocolOverride = $true
+
+# Create the pool
+New-HVPool -Pool $pool
+
+
+#Run this to explore the full structure of the object:
+$spec = New-Object Omnissa.Hv.DesktopPoolAutomated
+$spec | Get-Member
