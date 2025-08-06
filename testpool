@@ -105,3 +105,64 @@ New-HVPool -Pool $pool
 #Run this to explore the full structure of the object:
 $spec = New-Object Omnissa.Hv.DesktopPoolAutomated
 $spec | Get-Member
+
+
+###new
+
+
+# ────────────────────────────────────────────────
+# Load PowerCLI Module (if not auto-loaded)
+Import-Module Omnissa.VimAutomation.HorizonView
+
+# Ignore certificate warnings (for self-signed certs)
+Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
+
+# ────────────────────────────────────────────────
+# Connect to Horizon Connection Server
+$cred = Get-Credential  # Enter DOMAIN\username and password
+Connect-HVServer -Server "horizon01.domain.local" -Credential $cred
+
+# ────────────────────────────────────────────────
+# Create the automated pool specification
+$pool = New-Object Omnissa.Hv.DesktopPoolAutomated
+$pool.Id = "ENGPOOL01"
+$pool.DisplayName = "Engineering Pool"
+$pool.Description = "Automated desktop pool for the engineering team"
+$pool.Type = "AUTOMATED"
+$pool.EnableProvisioning = $true
+$pool.VirtualCenter = "vcenter01.domain.local"
+$pool.DefaultProtocol = "BLAST"
+$pool.AllowProtocolOverride = $true
+
+# ────────────────────────────────────────────────
+# Provisioning settings
+$provisioningSettings = New-Object Omnissa.Hv.DesktopPoolProvisioningSettings
+$provisioningSettings.VirtualCenter = "vcenter01.domain.local"
+$provisioningSettings.ParentVmPath = "Cluster1/GoldenImages/Win11-Template"
+$provisioningSettings.SnapshotPath = "Cluster1/GoldenImages/Win11-Template/Snapshot1"
+$provisioningSettings.HostOrClusterPath = "Cluster1"
+$provisioningSettings.ResourcePoolPath = "Cluster1/Resources/VDI"
+$provisioningSettings.VmFolderPath = "VDI-Desktops"
+$provisioningSettings.DatastorePaths = @("datastore1")
+$provisioningSettings.EnableProvisioning = $true
+$provisioningSettings.MaxNumberOfMachines = 10
+$provisioningSettings.MinNumberOfMachines = 2
+$provisioningSettings.HeadroomCount = 1
+$provisioningSettings.VmNamingPattern = "eng-vdi-{n:fixed=3}"
+
+# Attach provisioning settings to the pool
+$pool.ProvisioningSettings = $provisioningSettings
+
+# ────────────────────────────────────────────────
+# Create the desktop pool
+New-HVPool -Pool $pool
+
+# ────────────────────────────────────────────────
+# Confirm creation
+$createdPool = Get-HVPool -PoolId "ENGPOOL01"
+Write-Output "`n✅ Pool '$($createdPool.Id)' created successfully with display name '$($createdPool.DisplayName)'."
+
+# ────────────────────────────────────────────────
+# Disconnect from Horizon
+Disconnect-HVServer
+
