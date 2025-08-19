@@ -25,6 +25,7 @@ Ansible-friendly automation patterns
 
 Ansible doesn’t have a first-class “add TPM” VMware module yet, so call PowerCLI from your control node. This play targets localhost and runs PowerShell:
 
+```
 ---
 - name: Attach vTPM to Win11 gold images
   hosts: localhost
@@ -81,7 +82,7 @@ Ansible doesn’t have a first-class “add TPM” VMware module yet, so call Po
       args:
         executable: /bin/bash
 
-
+```
 Notes
 
 Requires PowerCLI ≥ 12.5 (the Get-VTpm/New-VTpm cmdlets).
@@ -94,6 +95,7 @@ Keep vCenter creds in Ansible Vault.
 
 Run this against the Windows gold image VM (not the base template), or scope it with an inventory group so you only flip it where intended.
 
+```
 ---
 - name: Enable FIPS on Windows 11 (gold images only)
   hosts: win_gold
@@ -119,7 +121,7 @@ Run this against the Windows gold image VM (not the base template), or scope it 
     - name: Reboot if required
       ansible.windows.win_reboot:
         msg: "Rebooting to apply FIPS setting"
-
+```
 Recommended build flow
 
 Packer (base template)
@@ -172,6 +174,8 @@ Quick PowerCLI task (idempotent)
 
 Drop this into your Ansible “localhost” step to enforce EFI + Secure Boot and attach vTPM only if missing:
 
+
+```
 Import-Module VMware.PowerCLI
 Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP:$false -Confirm:$false | Out-Null
 $cred = New-Object pscredential("{{ vcenter_user }}", (ConvertTo-SecureString "{{ vcenter_password }}" -AsPlainText -Force))
@@ -197,7 +201,7 @@ if (-not (Get-VTpm -VM $vm -ErrorAction SilentlyContinue)) {
   New-VTpm -VM $vm | Out-Null
 }
 Write-Host "EFI + Secure Boot enforced, vTPM present."
-
+```
 Packer/template notes (since you’re on EFI-Secure)
 
 Keep the base template EFI-Secure but without vTPM and without FIPS. That keeps it portable and avoids tying it to a key provider.
