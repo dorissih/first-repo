@@ -241,3 +241,45 @@ Copy
 Edit
 Start-VM -VM $vm
 ```
+```
+---
+- name: Enable vTPM on Windows 11 VM
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vcenter_hostname: "vcenter.example.com"
+    vcenter_username: "administrator@vsphere.local"
+    vcenter_password: "your-vcenter-password"
+    vm_name: "Win11-Gold"
+    key_provider: "KMS"
+
+  tasks:
+    - name: Shut down VM if running
+      community.vmware.vmware_vm_power_state:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        state: powered-off
+
+    - name: Enable vTPM using KMS key provider
+      community.vmware.vmware_vm_hardware:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        tpm: true
+        key_provider: "{{ key_provider }}"
+        state: present
+
+    - name: Power on the VM
+      community.vmware.vmware_vm_power_state:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        state: powered-on
+```
