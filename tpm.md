@@ -219,3 +219,25 @@ Run the PowerCLI step to attach vTPM and confirm Secure Boot is on.
 If this image needs it, run the Windows play to enable FIPS (registry + policy + reboot).
 
 Optional: enable VBS once app testing passes.
+
+
+```
+$vm = Get-VM -Name "Win11-Gold"
+
+# Step 1: Power off the VM (if not already)
+if ($vm.PowerState -eq "PoweredOn") {
+    Stop-VM -VM $vm -Confirm:$false
+}
+
+# Step 2: Get the Key Provider
+$keyProvider = Get-KeyProvider | Where-Object { $_.Name -eq "KMS" }
+
+# Step 3: Add vTPM
+New-TPM -VM $vm -KeyProvider $keyProvider
+You can also re-power the VM afterward:
+
+powershell
+Copy
+Edit
+Start-VM -VM $vm
+```
