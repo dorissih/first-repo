@@ -283,3 +283,237 @@ Start-VM -VM $vm
         name: "{{ vm_name }}"
         state: powered-on
 ```
+
+ChatGPT said:
+
+To disable vTPM on a VM in vSphere, you must:
+
+Power off the VM
+
+Remove the vTPM device
+
+(Optionally) Power it back on
+
+You can automate this with Ansible using the community.vmware.vmware_vm_hardware module.
+
+❗Important Notes Before Disabling vTPM
+
+vTPM stores sensitive data: If your Windows 11 VM was domain-joined, used BitLocker, or saved any secrets inside the TPM, removing vTPM may break Windows or cause BitLocker to enter recovery.
+
+Always test on a clone before disabling vTPM in production.
+
+✅ Ansible Playbook to Disable vTPM
+📄 disable_vtpm.yml
+```
+---
+- name: Disable vTPM on VM
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vcenter_hostname: "vcenter.example.com"
+    vcenter_username: "administrator@vsphere.local"
+    vcenter_password: "your-vcenter-password"
+    vm_name: "Win11-Gold"
+
+  tasks:
+    - name: Power off VM (required to remove vTPM)
+      community.vmware.vmware_vm_power_state:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        state: powered-off
+
+    - name: Remove vTPM device
+      community.vmware.vmware_vm_hardware:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        tpm: false
+        state: present
+
+    - name: Power on VM again
+      community.vmware.vmware_vm_power_state:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+        name: "{{ vm_name }}"
+        state: powered-on
+```
+🧪 How to Run It
+ansible-playbook disable_vtpm.yml
+
+
+Like before, you can use ansible-vault to encrypt the password for secure use.
+
+🧠 After Disabling vTPM
+
+On the next boot, Windows might:
+
+Show a BitLocker recovery screen if BitLocker was used.
+
+Show warnings in Event Viewer related to missing TPM.
+
+So it’s best to:
+
+Back up the VM or snapshot before making changes.
+
+Ensure BitLocker is suspended (if in use) before disabling vTPM.
+
+Let me know if you want to add BitLocker suspend, snapshot creation, or Windows-side cleanup to this playbook.
+
+You said:
+using powershell
+ChatGPT said:
+
+To disable vTPM using PowerShell (PowerCLI), you need to:
+
+Connect to vCenter
+
+Power off the VM
+
+Remove the vTPM device
+
+Power on the VM (optional)
+
+⚠️ Important: Like with Ansible, removing vTPM may break Windows if it relies on TPM (e.g., BitLocker, Windows Hello). Always test on a clone before production changes.
+
+✅ PowerShell Script to Disable vTPM
+```
+# Load VMware PowerCLI
+Import-Module VMware.PowerCLI
+
+# Disable certificate check (optional)
+Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
+
+# Connect to vCenter
+Connect-VIServer -Server "vcenter.example.com" -User "administrator@vsphere.local" -Password "your-password"
+
+# Set your VM name
+$vmName = "Win11-Gold"
+
+# Get the VM object
+$vm = Get-VM -Name $vmName
+
+# Step 1: Power off the VM if it's running
+if ($vm.PowerState -eq "PoweredOn") {
+    Stop-VM -VM $vm -Confirm:$false
+}
+
+# Step 2: Remove vTPM device
+# Get the VM's TPM device
+$tpmDevice = Get-VM -Name $vmName | Get-VMHardware | Get-VMHardwareTPM
+
+if ($tpmDevice) {
+    Remove-VMHardwareTPM -VM $vm -Confirm:$false
+    Write-Output "vTPM has been removed from VM: $vmName"
+} else {
+    Write-Output "No vTPM device found on VM: $vmName"
+}
+
+# Step 3: Power the VM back on
+Start-VM -VM $vm
+```
+🔍 Prerequisites
+
+PowerCLI installed:
+
+Install-Module -Name VMware.PowerCLI -Scope CurrentUser
+
+
+Account with permission to manage VM hardware and power state.
+
+Your vCenter must be reachable from your PowerShell environment.
+
+🛡️ Optional Additions
+
+Take a snapshot before removing vTPM
+
+Suspend BitLocker inside the guest before doing this (if applicable)
+
+Check if Secure Boot is enabled, which might also affect boot behavior
+
+Let me know if you’d like a version that includes any of these extras.
+
+You said:
+and reable vtpm
+ChatGPT said:
+
+To re-enable vTPM using PowerShell (PowerCLI) after it's been removed, you must:
+
+Power off the VM
+
+Add vTPM using a valid key provider (e.g., "KMS")
+
+Power on the VM
+
+Below is a complete script that performs all three steps.
+```
+✅ PowerShell Script to Re-Enable vTPM
+# Load PowerCLI
+Import-Module VMware.PowerCLI
+
+# Disable cert check (optional)
+Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
+
+# Connect to vCenter
+Connect-VIServer -Server "vcenter.example.com" -User "administrator@vsphere.local" -Password "your-password"
+
+# Set the VM name and key provider name
+$vmName = "Win11-Gold"
+$keyProviderName = "KMS"  # Replace with your actual key provider name if different
+
+# Get the VM object
+$vm = Get-VM -Name $vmName
+
+# Power off the VM (required)
+if ($vm.PowerState -eq "PoweredOn") {
+    Stop-VM -VM $vm -Confirm:$false
+}
+
+# Check if vTPM already exists
+$tpmDevice = Get-VM -Name $vmName | Get-VMHardware | Get-VMHardwareTPM
+
+if ($tpmDevice) {
+    Write-Output "vTPM is already enabled on VM: $vmName"
+} else {
+    # Get the Key Provider
+    $keyProvider = Get-KeyProvider | Where-Object { $_.Name -eq $keyProviderName }
+
+    if (-not $keyProvider) {
+        Write-Error "Key Provider '$keyProviderName' not found. Aborting."
+        exit 1
+    }
+
+    # Add vTPM
+    New-TPM -VM $vm -KeyProvider $keyProvider
+    Write-Output "vTPM has been added to VM: $vmName using Key Provider: $keyProviderName"
+}
+
+# Power on the VM again
+Start-VM -VM $vm
+```
+🔍 Requirements
+
+VM must be EFI firmware and hardware version 14+.
+
+The KMS Key Provider must be enabled and backed up in vCenter.
+
+PowerCLI version must support New-TPM and Get-KeyProvider (v12+ of PowerCLI).
+
+🧪 Optional: Check TPM from Inside Windows
+
+After boot, run in the Windows VM:
+
+Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm
+
+
+You should see:
+
+IsEnabled_InitialValue = True
+
+IsActivated_InitialValue = True
