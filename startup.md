@@ -196,3 +196,209 @@ SELinux: If enforcing and you use a nonstandard port, add an SELinux rule (e.g.,
 Logs: View with journalctl -u coverity -f.
 
 If you drop in your exact start/stop commands or version, I can tailor the defaults for you.
+
+Here’s a clean Ansible role to run the GrammaTech CodeSonar Hub under systemd. I’ve kept the service flexible so you can drop in your exact start/stop flags (different versions sometimes vary). Defaults assume the Hub is managed with the hub wrapper script.
+
+Role layout
+roles/
+  codesonar_service/
+    defaults/main.yml
+    tasks/main.yml
+    handlers/main.yml
+    templates/codesonar.service.j2
+    templates/codesonar.env.j2
+
+defaults/main.yml
+# Service identity
+codesonar_user: codesonar
+codesonar_group: codesonar
+
+# Install & data paths
+codesonar_home: /opt/codesonar                # CodeSonar install path (contains bin/hub)
+codesonar_var_dir: /var/lib/codesonar         # Parent state dir
+codesonar_hub_dir: /var/lib/codesonar/hub     # Hub config/state dir (existing or created)
+codesonar_log_dir: /var/log/codesonar
+
+# Environment
+codesonar_env_dir: /etc/codesonar
+codesonar_env_file: /etc/codesonar/codesonar.env
+codesonar_license: "7340@licenseserver.example.com"  # Adjust or leave blank if not needed
+codesonar_java_home: /usr/lib/jvm/java-17-openjdk     # If required by your build
+
+# Network
+codesonar_port: 7340
+codesonar_bind: "0.0.0.0"                     # or "127.0.0.1" if reverse proxying
+codesonar_firewalld_open: false               # set true on RHEL-family with firewalld
+
+# Start/stop commands (override to match your version/flags)
+# Common patterns include:
+#   {{ codesonar_home }}/bin/hub start -C {{ codesonar_hub_dir }} -l {{ codesonar_bind }}:{{ codesonar_port }} -d
+#   {{ codesonar_home }}/bin/hub stop -C {{ codesonar_hub_dir }}
+```
+codesonar_start_cmd: >-
+  {{ codesonar_home }}/bin/hub start
+  -C {{ codesonar_hub_dir }}
+  -l {{ codesonar_bind }}:{{ codesonar_port }}
+  -d
+codesonar_stop_cmd: "{{ codesonar_home }}/bin/hub stop -C {{ codesonar_hub_dir }}"
+```
+# Systemd
+```
+codesonar_systemd_unit: /etc/systemd/system/codesonar-hub.service
+codesonar_restart: on-failure
+codesonar_restart_sec: 5s
+codesonar_timeout_start: 120
+codesonar_timeout_stop: 120
+codesonar_limit_nofile: 65535
+```
+templates/codesonar.env.j2
+# Loaded by systemd EnvironmentFile=
+```
+CODESONAR_HOME="{{ codesonar_home }}"
+CODESONAR_HUB_DIR="{{ codesonar_hub_dir }}"
+CODESONAR_LICENSE="{{ codesonar_license }}"
+JAVA_HOME="{{ codesonar_java_home }}"
+```
+templates/codesonar.service.j2
+```
+[Unit]
+Description=GrammaTech CodeSonar Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ codesonar_user }}
+Group={{ codesonar_group }}
+EnvironmentFile={{ codesonar_env_file }}
+WorkingDirectory={{ codesonar_hub_dir }}
+
+# Use a shell to allow env expansion and multi-arg commands
+ExecStart=/bin/bash -lc "{{ codesonar_start_cmd }}"
+ExecStop=/bin/bash -lc "{{ codesonar_stop_cmd | default('/bin/kill -TERM $MAINPID') }}"
+
+# Resource & lifecycle
+Restart={{ codesonar_restart }}
+RestartSec={{ codesonar_restart_sec }}
+LimitNOFILE={{ codesonar_limit_nofile }}
+TimeoutStartSec={{ codesonar_timeout_start }}
+TimeoutStopSec={{ codesonar_timeout_stop }}
+
+# Hardening (tune per environment)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+```
+tasks/main.yml
+```
+---
+- name: Ensure group exists
+  ansible.builtin.group:
+    name: "{{ codesonar_group }}"
+    system: true
+
+- name: Ensure service user exists
+  ansible.builtin.user:
+    name: "{{ codesonar_user }}"
+    group: "{{ codesonar_group }}"
+    shell: /sbin/nologin
+    system: true
+    create_home: false
+
+- name: Create directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(codesonar_user) }}"
+    group: "{{ item.group | default(codesonar_group) }}"
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: "{{ codesonar_var_dir }}" }
+    - { path: "{{ codesonar_hub_dir }}" }
+    - { path: "{{ codesonar_log_dir }}" }
+    - { path: "{{ codesonar_env_dir }}", owner: "root", group: "root", mode: "0755" }
+
+- name: Drop environment file
+  ansible.builtin.template:
+    src: codesonar.env.j2
+    dest: "{{ codesonar_env_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart codesonar
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: codesonar.service.j2
+    dest: "{{ codesonar_systemd_unit }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Daemon reload
+    - Restart codesonar
+
+- name: Optionally open firewalld port
+  when: codesonar_firewalld_open
+  ansible.builtin.firewalld:
+    port: "{{ codesonar_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Enable and start CodeSonar Hub
+  ansible.builtin.systemd:
+    name: codesonar-hub.service
+    enabled: true
+    state: started
+```
+handlers/main.yml
+```
+---
+- name: Daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart codesonar
+  ansible.builtin.systemd:
+    name: codesonar-hub.service
+    state: restarted
+```
+Example playbook
+# codesonar.yml
+```
+- hosts: codesonar_hubs
+  become: yes
+  roles:
+    - role: codesonar_service
+      vars:
+        codesonar_home: /opt/codesonar
+        codesonar_hub_dir: /var/lib/codesonar/hub
+        codesonar_bind: 0.0.0.0
+        codesonar_port: 7340
+        codesonar_license: 7340@license01.mycorp.local
+        codesonar_firewalld_open: true
+        # If your version needs different flags, override start/stop:
+        # codesonar_start_cmd: "/opt/codesonar/bin/hub start -C /var/lib/codesonar/hub -l 0.0.0.0:7340 -d"
+        # codesonar_stop_cmd:  "/opt/codesonar/bin/hub stop -C /var/lib/codesonar/hub"
+```
+
+Run:
+
+ansible-playbook -i inventory.ini codesonar.yml
+
+Notes and tips
+
+Exact flags: CodeSonar versions differ. If your hub uses a different CLI (e.g., codesonar hub ...), just override codesonar_start_cmd/codesonar_stop_cmd in vars.
+
+Permissions: Make sure codesonar_user can read the install dir and owns the hub dir.
+
+SELinux: If listening on a nonstandard port under a web context, you may need semanage port -a -t http_port_t -p tcp 7340.
+
+Logs: Check journalctl -u codesonar-hub -f. If the hub writes its own logs, point them into codesonar_log_dir via your hub config.
+
+Reverse proxy: If you’ll front it with NGINX/Apache, set codesonar_bind: 127.0.0.1 and proxy the port.
