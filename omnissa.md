@@ -274,3 +274,162 @@ Quick example play (2412)
 
 
 If you want, tell me the exact features you need (Instant Clone vs manual, RDSH vs VDI, Teams, Scanner Redirection, etc.), and I’ll pin a 2412-specific ADDLOCAL string for your image.
+
+
+Got you. Here’s a clean, production-ready Ansible role + example play to install the Omnissa (Horizon) Agent for Windows—works for golden images or unmanaged desktops, handles silent switches, optional broker registration, reboots, and logging.
+
+Folder layout
+roles/
+  horizon_agent/
+    defaults/main.yml
+    tasks/main.yml
+playbooks/
+  install_horizon_agent.yml
+
+roles/horizon_agent/defaults/main.yml
+# Where to get the installer
+horizon_agent_installer_url: "\\\\fileserver\\packages\\VMware-Horizon-Agent-x86_64-2412.exe"
+# (Optional) If you’d rather upload from your Ansible control machine:
+# horizon_agent_installer_src: "/files/VMware-Horizon-Agent-x86_64-2412.exe"
+
+horizon_agent_installer_path: "C:\\Temp\\VMware-Horizon-Agent.exe"
+horizon_agent_log_path: "C:\\Windows\\Temp\\HorizonAgent-Install.log"
+
+# Features to install (must include Core if using ADDLOCAL)
+# Common picks: PCoIP, BlastUDP, RTAV, USB, ClientDriveRedirection, PrintRedir, TSMMR
+horizon_agent_features:
+  - Core
+  - BlastUDP
+  - PCoIP
+  - RTAV
+  - USB
+  - ClientDriveRedirection
+  - PrintRedir
+
+# Golden image? Skip broker pairing so clones register later.
+horizon_skip_broker_registration: true
+
+# If you’re installing on an unmanaged desktop and want immediate registration:
+horizon_register_with_broker: false
+horizon_connection_servers: []   # e.g. ["cs1.domain.local","cs2.domain.local"]
+
+# Windows Server used as single-user VDI desktop? Set to true to force desktop agent.
+horizon_force_desktop_agent_on_server: false
+
+# Enable RDP option in the installer dialog equivalent
+horizon_rdp_choice: 1  # 1 = enable RDP, 0 = disable
+
+roles/horizon_agent/tasks/main.yml
+- name: Ensure temp directory exists
+  ansible.windows.win_file:
+    path: 'C:\Temp'
+    state: directory
+
+- name: Ensure VMware Tools looks present (recommended prerequisite)
+  ansible.windows.win_stat:
+    path: 'C:\Program Files\VMware\VMware Tools\vmtoolsd.exe'
+  register: vmtools_bin
+
+- name: Warn if VMware Tools not found
+  ansible.builtin.debug:
+    msg: "Heads up: VMware Tools not found at expected path. Horizon Agent install is supported, but Tools should be installed first."
+  when: not vmtools_bin.stat.exists
+
+- name: Download Horizon Agent installer from URL/UNC
+  ansible.windows.win_get_url:
+    url: "{{ horizon_agent_installer_url }}"
+    dest: "{{ horizon_agent_installer_path }}"
+  when: horizon_agent_installer_url is defined
+
+- name: (Alternative) Copy installer from control machine
+  ansible.windows.win_copy:
+    src: "{{ horizon_agent_installer_src }}"
+    dest: "{{ horizon_agent_installer_path }}"
+  when: horizon_agent_installer_src is defined
+
+- name: Build MSI property string
+  ansible.builtin.set_fact:
+    horizon_msi_props: >-
+      ADDLOCAL={{ horizon_agent_features | join(',') }}
+      RDP_CHOICE={{ horizon_rdp_choice }}
+      REBOOT=ReallySuppress
+      {{ 'VDM_SKIP_BROKER_REGISTRATION=1' if horizon_skip_broker_registration else '' }}
+      {{ 'VDM_SERVER_NAME=' + (horizon_connection_servers | join(';')) if horizon_register_with_broker and horizon_connection_servers|length>0 else '' }}
+      {{ 'VDM_FORCE_DESKTOP_AGENT=1' if horizon_force_desktop_agent_on_server else '' }}
+
+# Note:
+# Horizon Agent EXE wraps MSI. /s makes the wrapper silent; /v"..." passes MSI options.
+# /qn for silent, /l*v for verbose log.
+- name: Install Omnissa Horizon Agent silently
+  ansible.windows.win_package:
+    path: "{{ horizon_agent_installer_path }}"
+    arguments: '/s /v"/qn /l*v {{ horizon_log_path }} {{ horizon_msi_props | trim }}"'
+    state: present
+  register: horizon_install
+
+- name: Reboot if the installer requested it
+  ansible.windows.win_reboot:
+    msg: "Rebooting to complete Omnissa Horizon Agent installation"
+    pre_reboot_delay: 5
+  when: horizon_install.reboot_required | default(false)
+
+# Quick verification (registry exists + optional broker hostname if registered)
+- name: Check Agent registry base
+  ansible.windows.win_reg_stat:
+    path: 'HKLM:\SOFTWARE\VMware, Inc.\VMware VDM\Agent'
+  register: agent_reg
+
+- name: Check broker hostname (only if registering to broker)
+  ansible.windows.win_reg_stat:
+    path: 'HKLM:\SOFTWARE\VMware, Inc.\VMware VDM\Agent\Configuration'
+    name: 'BrokerHostname'
+  register: broker_reg
+  when: horizon_register_with_broker
+
+- name: Report install summary
+  ansible.builtin.debug:
+    msg:
+      - "Horizon Agent registry present: {{ agent_reg.exists }}"
+      - "Broker registered to: {{ broker_reg.value | default('N/A') }}"
+      - "Installer log: {{ horizon_log_path }}"
+
+playbooks/install_horizon_agent.yml
+- name: Install Omnissa Horizon Agent
+  hosts: windows
+  gather_facts: false
+  roles:
+    - role: horizon_agent
+      vars:
+        horizon_agent_installer_url: "\\\\swrepo\\Horizon\\VMware-Horizon-Agent-x86_64-2412.exe"
+        horizon_skip_broker_registration: true          # true for golden image
+        horizon_register_with_broker: false             # set true for unmanaged desktops
+        horizon_connection_servers: ["hzn-cs01.domain.local","hzn-cs02.domain.local"]
+        horizon_force_desktop_agent_on_server: false    # set true if Windows Server as single-user VDI
+        horizon_agent_features:
+          - Core
+          - BlastUDP
+          - PCoIP
+          - RTAV
+          - USB
+          - ClientDriveRedirection
+          - PrintRedir
+
+Notes that matter
+
+Silent switches & features. The Agent supports MSI properties like ADDLOCAL, VDM_SKIP_BROKER_REGISTRATION, VDM_SERVER_NAME, VDM_FORCE_DESKTOP_AGENT, REBOOT=ReallySuppress, etc. Use ADDLOCAL to list features you want (must include Core). Omnissa’s docs cover these properties and examples. 
+Omnissa Documentation
++1
+
+Golden images. Use VDM_SKIP_BROKER_REGISTRATION=1 so your clones register at first boot/pool creation instead of the template attempting it. Example usage is shown in community and tech blogs. 
+vcloudnine.de
+
+Firewall. The installer can open required local firewall rules for Agent protocols (Blast/PCoIP/RDP). If you harden firewalls later, make sure those rules remain. 
+Omnissa Documentation
++1
+
+Services. After install and reboot you should see Horizon Agent/Blast services present and set to Automatic. (Service listing and roles are documented.) 
+Omnissa Documentation
+
+MSI semantics. The wrapper uses standard MSI syntax; the /s /v"/qn ..." pattern here is intentional. 
+VMware Documentation
+ I can tailor the defaults to your exact version (2412/2503), add checksum validation, or wire this into your existing Packer/Ansible golden-image flow.
