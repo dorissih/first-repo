@@ -736,3 +736,291 @@ Whether you use MFA
 If the user gets any specific error code (like Invalid Credentials vs. No resources available vs. Unable to connect)
 
 I can help you narrow it down more or even write a script to check cert trust or entitlement.
+
+
+I am still getting a certificate version 3 despite create a certificate template as described in the omnissa certificate template creation page 
+https://docs.omnissa.com/bundle/HorizonDaaSTenantAdministrationV9.2.0/page/SetUpaCertificateTemplateontheCA.html
+ChatGPT said:
+Thought for 33s
+
+Short answer: nothing’s wrong with your cert. You’re mixing up two different “versions.”
+
+X.509 certificate version (what you see in the cert details) — for any modern TLS cert, this is Version 3 and that’s exactly what Horizon/vSphere expect. You cannot (and shouldn’t) make an X.509 v2 TLS cert; v3 is the current standard and supports SANs, EKUs, etc. 
+Broadcom TechDocs
++1
+Microsoft Learn
+
+Windows “certificate template version” — this is the AD CS template schema (v1/v2/v3) you pick in certtmpl.msc via the Compatibility tab. Choosing a v2 template does not make the issued certificate “X.509 v2”; the issued cert will still be X.509 v3. 
+Microsoft Learn
+
+What Horizon actually needs
+
+For Connection Server / UAG / Agents, use a normal X.509 v3 server cert issued from a template with sane settings (SHA-256, RSA 2048+). Omnissa docs and Tech Zone materials focus on the template (KSP/CSP, EKUs, etc.), not changing the X.509 version. 
+Omnissa Docs
+Tech Zone
+
+Template checklist (recommended):
+
+Compatibility (template version): Windows Server 2008 R2 or later (lets you use KSP). If your org requires “legacy CSP,” pick Microsoft Enhanced RSA and AES Cryptographic Provider (supports SHA-256). 
+Omnissa Docs
++1
+
+Cryptography: RSA, 2048 or 3072 bits; Signature hash = SHA-256. 
+Omnissa Docs
+
+Subject name: Supply in the request; CN = FQDN of the Horizon component.
+
+SAN: DNS = FQDN (and short name if used). Modern clients rely on SAN, not CN. (This requires X.509 v3 — again, expected.) 
+Information Security Stack Exchange
+
+EKUs: Server Authentication (1.3.6.1.5.5.7.3.1). If you’re doing device/client auth scenarios, add the relevant EKUs per Omnissa docs. 
+Omnissa Community
+
+Private key: exportable No (typical), allow private key, key usage Digital Signature and Key Encipherment.
+
+How to confirm you’re good
+
+On the Horizon server, open certlm.msc → Personal → Certificates → your cert → Details and check:
+
+Version: “V3” (this is expected)
+
+Signature hash algorithm: sha256RSA
+
+Public key: RSA 2048+
+
+Enhanced Key Usage: includes Server Authentication
+
+Subject / SAN: match the server’s FQDN
+All of that is normal for Horizon’s TLS. 
+Omnissa Docs
+
+If your goal was a “v2 template”
+
+That’s only about the AD CS template schema (auto-enroll support, etc.). Set it in certtmpl.msc → Duplicate Template → Compatibility to older CA/OS levels to force a template v2. The issued cert will still be X.509 v3, which is correct. 
+Microsoft Learn
+
+If you share a screenshot of your current template’s Compatibility tab and Request Handling/Cryptography/EKU tabs, I can spot-check the exact fields you might need to tweak for Horizon.
+
+You said:
+so what about the SHA being 384?
+ChatGPT said:
+Thought for 27s
+
+Short version: SHA-384 is fine for Horizon, but SHA-256 is the safest default. If you’re seeing SHA-384 and want SHA-256 instead, that choice lives on the CA, not the template.
+
+What Horizon/UAG supports
+
+Omnissa documents list SHA-256, SHA-384, and SHA-512 as supported hash sizes (SHA-1 discouraged). So Horizon/UAG won’t break just because your cert is sha384RSA. 
+Omnissa Docs
++2
+Omnissa Docs
++2
+
+Why you got SHA-384
+
+The signature hash algorithm on issued certs (sha256RSA vs sha384RSA) is determined by the CA’s configuration and key provider, not by the certificate template. A template can affect the request signature, but the CA signs the certificate using whatever it’s configured to use. 
+PKI Solutions
+Server Fault
+
+If you want SHA-256 instead
+
+Change the CA’s hash algorithm, renew the CA cert (if required), and re-issue the Horizon server cert:
+
+Check current CA settings (GUI shows KSP/CSP and hash): Certification Authority → right-click CA → Properties → view current CA certificate. 
+Microsoft Learn
+
+Set CA to SHA-256 (KSP/CNG): e.g., certutil -setreg ca\csp\CNGHashAlgorithm SHA256, then renew the CA certificate and restart the service. (Plan impact on the chain if you’re changing the CA cert.) 
+TECHCOMMUNITY.MICROSOFT.COM
+SysAdmins
+
+Re-issue the Horizon cert from your (unchanged) web-server template; the issued cert will now be sha256RSA.
+
+UAG thumbprints: if you use UAG, its “Minimum SHA Hash Size”/thumbprint settings accept SHA-256/384/512; SHA-256 is the recommended minimum. 
+Omnissa Docs
++1
+
+Legacy note (only if you truly have 2003-era systems)
+
+Windows Server 2003 needs specific updates to handle SHA-2 at all; SHA-384/512 are especially troublesome there. If you have any such stragglers, stick to SHA-256 and ensure SHA-2 updates are installed. 
+Server Fault
+DigiCert Knowledge Base
+Cloud Direct
+
+Bottom line: For Horizon, SHA-256 or SHA-384 both work. Choose SHA-256 unless your security policy explicitly requires SHA-384/512, and set it on the CA, not the template.
+
+You said:
+when creating the cert can i add the option to give a SHA 256 instead on 384
+ChatGPT said:
+Thought for 18s
+
+Short answer: not on the request. In AD CS, the signature hash for issued certs (sha256RSA vs sha384RSA) is chosen by the CA, not by the certificate template or the individual request. To get SHA-256, set the CA to use SHA-256, then re-issue the cert. 
+PKI Solutions
+
+What to do (CA side)
+
+Check current setting
+
+certutil -getreg ca\csp\CNGHashAlgorithm
+
+
+If it shows SHA384, your CA is signing issued certs with SHA-384. 
+docs.securosys.com
+
+Switch to SHA-256
+
+certutil -setreg ca\csp\CNGHashAlgorithm SHA256
+net stop certsvc
+net start certsvc
+
+
+(Some environments will also renew the CA certificate so the CA itself is SHA-256; plan that change window.) 
+PeteNetLive
+Microsoft Learn
+
+(Optional but recommended) If you ever ran with RSASSA-PSS and hit VMware/Omnissa import issues, ensure you’re on sha256RSA, not PSS, before renewing the CA. 
+Derek Seaman's Tech Blog
+
+Re-issue your Horizon/Connection Server cert from the same web-server template. The new issued cert will now show Signature hash algorithm: sha256RSA. Per-template control of the signature hash isn’t a thing in AD CS. 
+PKI Solutions
+
+Horizon context
+
+Horizon/UAG accept SHA-256/384/512, but SHA-256 is the safest default and maximizes compatibility with older clients and tools. 
+Omnissa Docs
+
+If you want, tell me your CA OS version (2012 R2/2016/2019/2022), CSP/KSP, and whether you use an HSM, and I’ll tailor exact renewal steps (including CAPolicy.inf tips like disabling alternate signatures). 
+michaelwaterman.nl
+
+You said:
+like using this command certreq -submit -attrib  "Certificatetemplate:Webservers" Something.csr 
+then add the option for the SHA 256
+ChatGPT said:
+Thought for 10s
+
+Short answer: No—certreq -submit -attrib "CertificateTemplate:WebServer" can’t force SHA-256. The hash on the issued cert is chosen by the CA’s signing setting, not by the request/attributes. To get SHA-256, change the CA’s hash algorithm and reissue. 
+Server Fault
+Microsoft Learn
+
+What actually works
+
+Set the CA to SHA-256 (server-wide):
+
+certutil -setreg ca\csp\CNGHashAlgorithm SHA256
+net stop certsvc
+net start certsvc
+
+
+(Some environments also renew the CA cert afterward.) 
+Microsoft Learn
++1
+
+Re-issue your Horizon cert from the same template. It will now show Signature hash algorithm: sha256RSA because the CA is signing with SHA-256. 
+Server Fault
+
+Optional: sign the request with SHA-256 (for completeness)
+
+This affects only the CSR’s signature, not the CA’s signature on the issued cert:
+
+; request.inf
+[Version]
+Signature="$Windows NT$"
+
+[NewRequest]
+Subject = "CN=hzn.example.com"
+KeyLength = 2048
+KeySpec = 1
+KeyAlgorithm = RSA
+Exportable = FALSE
+HashAlgorithm = sha256      ; CSR hash only
+MachineKeySet = TRUE
+RequestType = PKCS10
+
+[Extensions]
+2.5.29.17 = "{text}"
+_continue_ = "dns=hzn.example.com&"
+
+certreq -new request.inf request.req
+certreq -submit -attrib "CertificateTemplate:WebServer" request.req
+
+
+The issued cert’s hash still follows the CA setting above. 
+Microsoft Learn
++1
+PKI Solutions
+
+If you want, tell me the CA OS version (2016/2019/2022) and whether it’s KSP/CSP or HSM-backed, and I’ll tailor the exact renewal steps (including avoiding RSASSA-PSS if any downstream appliances are picky). 
+Derek Seaman's Tech Blog
+
+You said:
+i am using a windows 2022 server
+ChatGPT said:
+Thought for 7s
+
+Got it — since you’re on Windows Server 2022 AD CS, here’s the clean, CA-side way to make all issued certs come out as SHA-256 (sha256RSA) instead of SHA-384.
+
+TL;DR
+
+You can’t force SHA-256 from certreq or the template. Set the CA’s signing hash to SHA-256, restart the CA service, and (if needed) renew the CA certificate, then re-issue your Horizon cert. 
+Microsoft Learn
+
+Step-by-step on the CA (Server 2022)
+
+Check the CA’s current signing hash
+
+certutil -getreg ca\csp\CNGHashAlgorithm
+
+
+If it returns SHA384, your CA is signing issued certs with SHA-384. 
+Evotec
+
+Switch the CA to SHA-256
+
+certutil -setreg ca\csp\CNGHashAlgorithm SHA256
+net stop certsvc
+net start certsvc
+
+
+This changes the hash the CA uses when it signs issued certs. 
+Evotec
+
+(Often required) Renew the CA certificate
+
+Open Certification Authority → right-click your CA → All Tasks → Renew CA Certificate… → choose Same key (usually fine) unless you’re rotating keys.
+
+Follow the wizard; the new CA cert will be signed with SHA-256. After renewal, distribute the updated CA cert to clients (GPO/MDM, etc.). 
+Microsoft Learn
++1
+
+Avoid the RSASSA-PSS surprise (VMware/Omnissa)
+If your CA was configured to issue RSASSA-PSS signatures, Horizon/vSphere appliances can choke on the chain. Ensure you’re on sha256RSA (PKCS#1 v1.5), not PSS, before you renew. 
+Derek Seaman's Tech Blog
+
+CAPolicy.inf (only if you’re renewing/standing up a CA)
+If you use a CAPolicy.inf during renewal, don’t enable the alternate signature format:
+
+[Certsrv_Server]
+AlternateSignatureAlgorithm=0
+
+
+Enabling it can break non-Windows or older clients. Place CAPolicy.inf in C:\Windows\ before renewal if you need to control CA behavior. 
+Microsoft Learn
++1
+Server Fault
+
+Re-issue your Horizon/Connection Server cert
+Submit the same way you already do:
+
+certreq -submit -attrib "CertificateTemplate:WebServer" request.req
+
+
+The issued cert will now show Signature hash algorithm: sha256RSA because the CA is set to SHA-256. (Templates/certreq can’t override the CA’s signing hash.) 
+Microsoft Learn
+
+How to verify
+
+On the issuing CA: Certification Authority → Properties → View Certificate shows the CA cert’s Signature hash algorithm (should be SHA-256 after renewal). 
+Microsoft Learn
+
+On the Horizon server: certlm.msc → Personal → Certificates → your cert → Details → Signature hash algorithm should read sha256RSA.
+
+If you tell me whether your CA key is software KSP or HSM-backed, I can tailor the renewal choice (same key vs new key) and any extra HSM steps.
