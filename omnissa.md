@@ -1024,3 +1024,124 @@ Microsoft Learn
 On the Horizon server: certlm.msc → Personal → Certificates → your cert → Details → Signature hash algorithm should read sha256RSA.
 
 If you tell me whether your CA key is software KSP or HSM-backed, I can tailor the renewal choice (same key vs new key) and any extra HSM steps.
+
+Got it. That error usually means your environment’s firewall module doesn’t recognize the enabled parameter (older community.windows/ansible.windows versions) or it’s using a different FQCN. Two solid fixes below—pick one.
+
+Fix A — Use the firewall module, but compatible with older collections
+
+Call the module by its fully qualified name, and
+
+Drop enabled: (most versions create rules enabled by default).
+
+- name: Open inbound ports for Horizon (module path + no 'enabled')
+  community.windows.win_firewall_rule:
+    name: "{{ item.name }}"
+    localport: "{{ item.port }}"
+    protocol: "{{ item.protocol }}"
+    action: allow
+    direction: in
+    state: present
+    profile: any
+  loop:
+    - { name: 'Horizon Blast TCP 8443', port: 8443, protocol: tcp }
+    - { name: 'Horizon Blast TCP 8444', port: 8444, protocol: tcp }
+    - { name: 'Horizon Blast TCP 443',  port: 443,  protocol: tcp }
+    - { name: 'Horizon Blast UDP 8443', port: 8443, protocol: udp }
+    - { name: 'PCoIP TCP 4172',        port: 4172, protocol: tcp }
+    - { name: 'PCoIP UDP 4172',        port: 4172, protocol: udp }
+    - { name: 'RDP TCP 3389',          port: 3389, protocol: tcp }
+
+
+If your collection is ansible.windows, switch the FQCN to ansible.windows.win_firewall_rule.
+
+Fix B — PowerShell fallback (works everywhere, idempotent)
+
+This bypasses module-version quirks entirely and ensures rules are enabled.
+
+- name: Define Horizon firewall rules
+  vars:
+    horizon_fw_rules:
+      - { name: 'Horizon Blast TCP 8443', port: 8443, proto: 'TCP' }
+      - { name: 'Horizon Blast TCP 8444', port: 8444, proto: 'TCP' }
+      - { name: 'Horizon Blast TCP 443',  port: 443,  proto: 'TCP' }
+      - { name: 'Horizon Blast UDP 8443', port: 8443, proto: 'UDP' }
+      - { name: 'PCoIP TCP 4172',        port: 4172, proto: 'TCP' }
+      - { name: 'PCoIP UDP 4172',        port: 4172, proto: 'UDP' }
+      - { name: 'RDP TCP 3389',          port: 3389, proto: 'TCP' }
+
+- name: Ensure inbound rules exist and are enabled (PowerShell)
+  ansible.windows.win_powershell:
+    parameters:
+      DisplayName: "{{ item.name }}"
+      Port: "{{ item.port }}"
+      Protocol: "{{ item.proto }}"
+    script: |
+      param(
+        [string]$DisplayName,
+        [int]$Port,
+        [ValidateSet('TCP','UDP')][string]$Protocol
+      )
+
+      $rule = Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue
+      if (-not $rule) {
+        New-NetFirewallRule `
+          -DisplayName $DisplayName `
+          -Direction Inbound `
+          -Action Allow `
+          -Enabled True `
+          -Profile Any `
+          -Protocol $Protocol `
+          -LocalPort $Port | Out-Null
+        Write-Output "created"
+      }
+      else {
+        # Make sure it stays enabled and matches desired settings
+        Set-NetFirewallRule -DisplayName $DisplayName -Enabled True -Action Allow -Direction Inbound -Profile Any | Out-Null
+        Set-NetFirewallRule -DisplayName $DisplayName -NewDisplayName $DisplayName | Out-Null
+        Set-NetFirewallRule -DisplayName $DisplayName | Out-Null
+        Set-NetFirewallRule -DisplayName $DisplayName -PolicyStore ActiveStore | Out-Null
+        Set-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue | Out-Null
+
+        # Update port/protocol if needed (requires filter on rule’s associated port filter)
+        $filters = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+        if ($filters.LocalPort -ne "$Port" -or $filters.Protocol -ne $Protocol) {
+          # Remove and recreate to make it exact
+          Remove-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue
+          New-NetFirewallRule `
+            -DisplayName $DisplayName `
+            -Direction Inbound `
+            -Action Allow `
+            -Enabled True `
+            -Profile Any `
+            -Protocol $Protocol `
+            -LocalPort $Port | Out-Null
+          Write-Output "recreated"
+        }
+        else {
+          Write-Output "ok"
+        }
+      }
+  loop: "{{ horizon_fw_rules }}"
+  register: fw_result
+  changed_when: "'created' in fw_result.stdout or 'recreated' in fw_result.stdout"
+
+# Optional: show a short summary
+- name: Firewall update summary
+  ansible.builtin.debug:
+    var: fw_result.results | map(attribute='stdout') | list
+
+Quick tips
+
+Run with elevation:
+
+become: yes
+become_method: runas
+vars:
+  ansible_become_user: Administrator
+
+
+If you already have similarly named GPO-pushed rules, use unique names (e.g., prefix with HZN:) to avoid collisions.
+
+If you don’t want RDP open, just remove the 3389 entry.
+
+Want me to fold this into your existing horizon_agent role and add outbound (egress) rules for Agent→Connection Server too?
