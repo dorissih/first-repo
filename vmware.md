@@ -1,3 +1,4 @@
+```
 - name: Ensure Omnissa Horizon Agent is installed, PATHed, and running
   hosts: windows
   gather_facts: no
@@ -68,3 +69,4 @@
         name: "{{ horizon_service_name }}"
         start_mode: auto
         state: started
+```
