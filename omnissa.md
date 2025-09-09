@@ -1145,3 +1145,14 @@ If you already have similarly named GPO-pushed rules, use unique names (e.g., pr
 If you don’t want RDP open, just remove the 3389 entry.
 
 Want me to fold this into your existing horizon_agent role and add outbound (egress) rules for Agent→Connection Server too?
+
+
+
+- name: Check Horizon Agent status
+  win_service_info:
+    name: "VMwareViewAgent"
+  register: viewagent_status
+
+- debug:
+    var: viewagent_status
+
