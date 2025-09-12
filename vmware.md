@@ -174,3 +174,5 @@ https://lucaberton.medium.com/add-a-new-hard-disk-to-vmware-vsphere-virtual-mach
 
 https://lucaberton.medium.com/ansible-modules-win-command-vs-win-shell-4e57ccb98cdf
 https://lucaberton.medium.com/change-local-user-password-on-windows-like-systems-ansible-module-win-user-a7f0560d8424
+
+https://abhijeet-kamble619.medium.com/10-things-you-should-start-using-in-your-ansible-playbook-808daff76b65
