@@ -167,3 +167,7 @@ If not found, it outputs a message.
 Ansible registers output into horizon_agent_status.
 
 Debug task prints the result so you can see it in your Ansible run.
+
+
+
+https://lucaberton.medium.com/add-a-new-hard-disk-to-vmware-vsphere-virtual-machine-ansible-module-vmware-guest-disk-599ff8b9a738
