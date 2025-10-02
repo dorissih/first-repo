@@ -1156,3 +1156,19 @@ Want me to fold this into your existing horizon_agent role and add outbound (egr
 - debug:
     var: viewagent_status
 
+
+- name: Install Horizon Agent
+  win_package:
+    path: C:\Install\Omnissa-Horizon-Agent-x86_64-2412.exe
+    arguments: '/s /v "/qn ADDLOCAL=ALL REBOOT=ReallySuppress /l*v C:\Temp\horizon.log"'
+    state: present
+
+- name: Reboot after agent install
+  win_reboot:
+
+- name: Ensure Horizon Agent service is running
+  win_service:
+    name: "VMware Horizon View Agent"
+    start_mode: auto
+    state: started
+
