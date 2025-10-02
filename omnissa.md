@@ -1172,3 +1172,59 @@ Want me to fold this into your existing horizon_agent role and add outbound (egr
     start_mode: auto
     state: started
 
+
+---
+- name: Install and fix Omnissa Horizon Agent 2412
+  hosts: windows_vms
+  gather_facts: no
+  vars:
+    installer_path: "C:\\Install\\Omnissa-Horizon-Agent-x86_64-2412.msi"
+    install_log: "C:\\Temp\\omnissa-horizon-agent-install.log"
+    agent_binary: "C:\\Program Files\\Omnissa\\Horizon Agent\\Agent\\omnissa-horizonagent.exe"
+    service_name: "Omnissa Horizon Agent"
+
+  tasks:
+    - name: Install Omnissa Horizon Agent using msiexec
+      win_shell: |
+        msiexec.exe /i "{{ installer_path }}" /qn ADDLOCAL=Core,ALL REBOOT=ReallySuppress /L*V "{{ install_log }}"
+      args:
+        creates: "{{ agent_binary }}"
+
+    - name: Reboot after Horizon Agent installation
+      win_reboot:
+
+    - name: Verify Omnissa Horizon Agent binary exists
+      win_stat:
+        path: "{{ agent_binary }}"
+      register: agent_file
+
+    - name: Fail if agent binary is missing
+      fail:
+        msg: "Omnissa Horizon Agent binary not found at {{ agent_binary }}. Install likely failed."
+      when: not agent_file.stat.exists
+
+    - name: Check if Omnissa Horizon Agent service exists
+      win_service_info:
+        name: "{{ service_name }}"
+      register: agent_service_info
+      ignore_errors: yes
+
+    - name: Create Omnissa Horizon Agent service if missing
+      win_command: >
+        sc.exe create "{{ service_name }}"
+        binPath= "\"{{ agent_binary }}\""
+        start= auto
+        DisplayName= "{{ service_name }}"
+      when: agent_service_info.failed is defined and agent_service_info.failed
+
+    - name: Ensure Omnissa Horizon Agent service is running
+      win_service:
+        name: "{{ service_name }}"
+        start_mode: auto
+        state: started
+
+    - name: (Optional) Remove installer file to clean up
+      win_file:
+        path: "{{ installer_path }}"
+        state: absent
+
