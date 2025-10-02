@@ -1,0 +1,226 @@
+1. Preparation
+
+Review release notes for both 24.x and 25.2.1 (there may be required interim steps, e.g., schema upgrades).
+
+Check system requirements (Java version, Tomcat version, DB compatibility – Fortify usually bumps these between major releases).
+
+Backups:
+
+Database (full dump).
+
+FortifyConfig.properties.
+
+Custom properties, certificates, and user auth configs (SSO, LDAP, Keycloak).
+
+WAR file customizations (if any).
+
+Licensing: Verify your license file supports 25.2.1.
+
+2. Upgrade Path
+
+Micro Focus / OpenText Fortify generally supports direct upgrades across versions if you’re within the schema migration path. For 23.2.1 → 25.2.1, you can usually go direct, but confirm with the release notes. If not, you may need to hop through 24.x first.
+
+3. Upgrade Steps
+
+Stop Fortify SSC (Tomcat service).
+
+Backup database (MySQL, PostgreSQL, or MSSQL depending on your setup).
+
+Remove old WAR:
+
+Delete webapps/ssc folder.
+
+Delete webapps/ssc.war.
+
+Deploy new WAR (25.2.1):
+
+Copy ssc.war (from new installer bundle) into webapps/.
+
+Start Tomcat.
+
+Schema upgrade: On first start, SSC will auto-prompt for DB schema upgrade.
+
+Login as admin → confirm schema update.
+
+This may take several minutes depending on DB size.
+
+Verify config:
+
+FortifyConfig.properties (should still be intact).
+
+SSL/TLS certs.
+
+LDAP/SSO integration.
+
+4. Post-Upgrade
+
+Validate by logging in and checking:
+
+Version on the dashboard = 25.2.1.
+
+User roles, applications, and reports are intact.
+
+Test integrations:
+
+Fortify SCA uploads.
+
+Fortify WebInspect / CI pipelines.
+
+Keycloak SSO (if configured).
+
+Run a test scan upload to confirm.
+
+5. Rollback Plan
+
+If upgrade fails:
+
+Stop Tomcat.
+
+Restore old WAR (ssc.war from 23.2.1).
+
+Restore DB backup.
+
+Restart.
+
+✅ Tip: If your environment is air-gapped (you mentioned that before), preload the 25.2.1 WAR and dependencies (Java/Tomcat upgrades if needed).
+
+Do you want me to create a full runbook with exact Linux & Windows commands for Tomcat, database backup/restore, and schema verification — like I did for your Fortify upgrade documentation earlier? That way you’ll have a ready step-by-step script to follow.
+
+You said:
+yes
+ChatGPT said:
+
+Perfect. I’ll write you a complete upgrade runbook for Fortify SSC 23.2.1 → 25.2.1, separated into Linux and Windows sections, with exact commands, schema steps, and rollback.
+
+🔹 Fortify SSC Upgrade Runbook (23.2.1 → 25.2.1)
+1. Pre-Upgrade Checklist
+
+✅ Download Fortify SSC 25.2.1 WAR file and documentation.
+
+✅ Verify Java and Tomcat versions meet 25.2.1 requirements.
+
+✅ Confirm DB engine (MySQL, PostgreSQL, or MSSQL) is supported in 25.2.1.
+
+✅ Backup:
+
+Database (full dump/backup).
+
+FortifyConfig.properties.
+
+Certificates (keystore.jks or PEM files).
+
+ssc-content folder if present.
+
+✅ Verify license file works for 25.2.1.
+
+✅ Notify stakeholders: SSC downtime required (1–2 hrs).
+
+2. Upgrade Steps (Linux – Tomcat)
+Stop Services
+# Stop Tomcat
+sudo systemctl stop tomcat
+
+# Confirm process is stopped
+ps -ef | grep tomcat
+
+Backup Database
+
+PostgreSQL Example:
+
+pg_dump -U fortify -h localhost -Fc fortifydb > /backup/fortifydb_23.2.1.dump
+
+
+MySQL/MariaDB Example:
+
+mysqldump -u fortify -p fortifydb > /backup/fortifydb_23.2.1.sql
+
+Backup Config
+cp /opt/tomcat/webapps/ssc/WEB-INF/classes/FortifyConfig.properties /backup/
+cp -r /opt/tomcat/.keystore /backup/
+
+Replace WAR
+rm -rf /opt/tomcat/webapps/ssc
+rm -f /opt/tomcat/webapps/ssc.war
+
+cp /installers/ssc-25.2.1.war /opt/tomcat/webapps/ssc.war
+
+Start Tomcat
+sudo systemctl start tomcat
+tail -f /opt/tomcat/logs/catalina.out
+
+3. Upgrade Steps (Windows – Tomcat)
+Stop Services
+net stop Tomcat9
+
+Backup Database
+
+MSSQL Example:
+
+BACKUP DATABASE fortifydb TO DISK='D:\backup\fortifydb_23.2.1.bak';
+
+Backup Config
+copy "C:\Tomcat\webapps\ssc\WEB-INF\classes\FortifyConfig.properties" D:\backup\
+copy "C:\Tomcat\.keystore" D:\backup\
+
+Replace WAR
+rmdir /S /Q "C:\Tomcat\webapps\ssc"
+del "C:\Tomcat\webapps\ssc.war"
+
+copy "D:\installers\ssc-25.2.1.war" "C:\Tomcat\webapps\ssc.war"
+
+Start Tomcat
+net start Tomcat9
+
+4. Schema Upgrade
+
+Log in as SSC admin in the browser after restart.
+
+You’ll be prompted for a database schema upgrade.
+
+Confirm → let SSC perform schema migration.
+
+Monitor Tomcat logs for Schema update completed successfully.
+
+5. Post-Upgrade Validation
+
+Log in → check version = 25.2.1.
+
+Validate:
+
+Applications, users, roles intact.
+
+Upload a new FPR (Fortify SCA result).
+
+Integrations (Keycloak/LDAP, pipelines).
+
+Run a sample report (CSV/PDF) to confirm functionality.
+
+6. Rollback Plan
+
+If upgrade fails:
+
+Stop Tomcat.
+
+Drop the upgraded DB and restore backup:
+
+Postgres:
+
+pg_restore -U fortify -h localhost -d fortifydb /backup/fortifydb_23.2.1.dump
+
+
+MySQL:
+
+mysql -u fortify -p fortifydb < /backup/fortifydb_23.2.1.sql
+
+
+MSSQL:
+
+RESTORE DATABASE fortifydb FROM DISK='D:\backup\fortifydb_23.2.1.bak' WITH REPLACE;
+
+
+Replace WAR back to 23.2.1:
+
+cp /backup/ssc-23.2.1.war /opt/tomcat/webapps/ssc.war
+
+
+Start Tomcat.
