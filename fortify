@@ -224,3 +224,197 @@ cp /backup/ssc-23.2.1.war /opt/tomcat/webapps/ssc.war
 
 
 Start Tomcat.
+
+Got it, Miss gurl. Here’s a clean, proven path to move Fortify SSC 23.2.1 on a VM → SSC 25.2.x on Kubernetes using the official Helm chart. I’ll keep it tight but complete—copy/paste ready.
+
+High-level game plan
+
+Snapshot & back up the current SSC (files + DB).
+
+Prep Kubernetes (storage class, ingress, secrets).
+
+Deploy SSC 25.2 on K8s with Helm, pointing it at your existing DB.
+
+Let SSC perform the DB upgrade on first start (maintenance window).
+
+Post-checks (license, plugins, integrations, SSO).
+
+(Helm chart + guide are official; first startup will upgrade the schema automatically. 
+microfocus.com
++1
+)
+
+0) What to back up from the VM (before you touch anything)
+
+Your database (full backup).
+
+The SSC “home” contents—on Windows/Tomcat this is the <fortify.home>\ssc\ tree (contains conf\app.properties, conf\datasource.properties, conf\log4j2.xml, conf\version.properties, conf\secret.key, fortify.license, init.token, plugins, etc.). This maps to /fortify/ssc in containers. 
+microfocus.com
++1
+
+Tip: copy out any custom parser/report plugins and your license file; you’ll mount or re-upload them later. 
+SAP Help Portal
+
+1) Prereqs on Kubernetes
+
+Cluster & Helm: a supported K8s version with Helm 3. Create/identify a default StorageClass for persistent volumes. (Helm/K8s use standard values.yaml overrides.) 
+microfocus.com
++2
+Helm
++2
+
+Persistent storage: SSC container needs a writable PV at /fortify for config, logs, and full-text indexes. Size it based on project count (start with 50–100 GiB and grow). 
+GitLab
+
+Database: keep using your current external DB (PostgreSQL/MSSQL/Oracle) but take a full backup and confirm the version is supported by SSC 25.2. (System requirements + DB guide.) 
+microfocus.com
++1
+
+Ingress/TLS: have a DNS name and certificate ready.
+
+2) Create Kubernetes secrets
+# DB password
+kubectl -n ssc create secret generic ssc-db-secret \
+  --from-literal=DB_PASSWORD='REDACTED'
+
+# (Optional) Fortify license if you want to mount it from a secret
+kubectl -n ssc create secret generic ssc-license \
+  --from-file=fortify.license=./fortify.license
+
+3) Prepare Helm values (values-ssc.yaml)
+
+The official chart is published as an OCI Helm chart. We’ll point SSC to your existing DB and enable ingress.
+
+image:
+  # Use a 25.2.x tag (check Docker Hub for the latest patch)
+  repository: fortifydocker/ssc
+  tag: "25.2.1.0010"        # or newer 25.2.x
+  pullPolicy: IfNotPresent
+
+persistence:
+  enabled: true
+  size: 100Gi
+  mountPath: /fortify           # SSC home inside the container
+  storageClass: <your-storageclass>
+
+# Database configuration
+database:
+  type: postgresql              # postgresql | mssql | oracle
+  host: <db-hostname>
+  port: 5432
+  name: ssc
+  user: sscuser
+  existingPasswordSecret: ssc-db-secret
+  existingPasswordSecretKey: DB_PASSWORD
+  # Optional JDBC extras (e.g., sslmode)
+  jdbcParams: "sslmode=prefer"
+
+# Initial admin + license (you can also upload via UI)
+ssc:
+  contextPath: ssc
+  # If you stored fortify.license as a secret and want it auto-copied:
+  license:
+    enabled: true
+    secretName: ssc-license
+    key: fortify.license
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: ssc.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts: [ssc.example.com]
+      secretName: ssc-tls
+
+resources:
+  requests:
+    cpu: "2"
+    memory: "8Gi"
+  limits:
+    cpu: "4"
+    memory: "16Gi"
+
+
+Chart & installation method are documented in Deploying SSC in Kubernetes; images/tags and the Helm chart location are listed on Docker Hub (fortifydocker/helm-ssc). 
+microfocus.com
++1
+
+The container’s /fortify path persists SSC config + indexes (equivalent of <fortify.home>). 
+GitLab
+
+4) Install SSC 25.2 on Kubernetes (Helm 3, OCI)
+kubectl create ns ssc
+
+# (Optional) Pull locally
+helm pull oci://registry-1.docker.io/fortifydocker/helm-ssc \
+  --version 25.2.2-1
+
+# Install/upgrade with your values
+helm upgrade --install ssc \
+  oci://registry-1.docker.io/fortifydocker/helm-ssc \
+  --version 25.2.2-1 \
+  -n ssc -f values-ssc.yaml
+
+
+(OCI-hosted chart + versioning per Docker Hub listing; use the latest 25.2.x.) 
+Docker Hub
+
+5) First startup & database upgrade
+
+On first pod start with the 25.2 image, SSC detects the existing schema and upgrades it (maintenance window recommended). Monitor logs until it exits maintenance and the UI is reachable at https://ssc.example.com/ssc. 
+microfocus.com
+
+Watch logs
+
+kubectl -n ssc logs deploy/ssc -f
+
+
+If it can’t find/initialize the home, check the PV mount at /fortify and ensure the pod can write to it. If you see “maintenance mode,” verify version.properties exists under /fortify/ssc/conf. 
+GitLab
++1
+
+6) Move over the “extras”
+
+License: upload in Administration → Licensing if you didn’t inject it. 
+microfocus.com
+
+Plugins: re-upload parser/report plugins in ADMINISTRATION → Plugins. 
+SAP Help Portal
+
+SSO/LDAP: re-apply IdP metadata and group mappings if not carried by DB. 
+miniOrange
+
+7) Cutover checklist
+
+✅ Login works; projects, issues, reports visible.
+
+✅ Schema jobs not failing; indexes healthy.
+
+✅ Ingress/TLS green; health endpoints OK.
+
+✅ ScanCentral SAST/DAST controllers pointing to the new URL (if you changed DNS). (Integration notes in the 25.2 user guide.) 
+microfocus.com
+
+8) Rollback plan (just in case)
+
+If anything misbehaves, scale SSC to 0, restore the DB backup, and bring the old VM back up. Because SSC upgrades the DB schema on startup, the DB restore is your hard rollback line. 
+microfocus.com
+
+Notes & gotchas
+
+Supported DB versions: verify your exact DB engine/version against the 25.2 System Requirements before the window. (If you’re on managed PostgreSQL/MSSQL, check its supported engine versions too.) 
+microfocus.com
+
+Storage sizing: indexes can grow; start larger PVs to avoid immediate resizes. 
+GitLab
+
+Chart updates: the Helm repo lists 25.2.x patch chart versions; prefer latest tag (e.g., 25.2.2-1) for fixes. 
+Docker Hub
+
+One-liner summary
+
+Back up DB + <fortify.home>, deploy the official 25.2 Helm chart on K8s with a PV at /fortify and point it at your existing DB; first boot upgrades the schema; then re-add license/plugins and test
