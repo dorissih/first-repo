@@ -1,0 +1,180 @@
+Got it. I followed the steps in your link and wrapped them into a clean Ansible role for RHEL 8. It creates the node_exporter user, installs the binary, sets up a systemd service, opens port 9100 in firewalld, and verifies the service is listening—mirroring the guide’s approach (download tarball, move binary to /usr/local/bin, create unit file, enable & start, check :9100/metrics) 
+Liquid Web
+.
+
+Quick start
+inventory.ini
+site.yml
+roles/
+  node_exporter/
+    defaults/main.yml
+    tasks/main.yml
+    handlers/main.yml
+    templates/node_exporter.service.j2
+
+site.yml
+---
+- name: Install Prometheus Node Exporter on RHEL 8
+  hosts: rhel8
+  become: true
+  roles:
+    - node_exporter
+
+roles/node_exporter/defaults/main.yml
+# Node Exporter version to install (matches the blog’s approach of pulling a release tarball)
+node_exporter_version: "1.8.0"            # keep in sync with desired version from GitHub
+node_exporter_arch: "linux-amd64"
+node_exporter_user: "node_exporter"
+node_exporter_group: "node_exporter"
+node_exporter_bin_dir: "/usr/local/bin"
+node_exporter_listen_port: 9100
+node_exporter_extra_flags: ""             # e.g. "--collector.processes"
+node_exporter_download_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+
+# Optional: supply checksum to harden downloads (sha256)
+# node_exporter_tarball_checksum: "sha256:..."
+
+roles/node_exporter/tasks/main.yml
+---
+- name: Ensure dependencies present
+  package:
+    name:
+      - tar
+      - gzip
+      - shadow-utils
+      - curl
+      - firewalld
+    state: present
+
+- name: Ensure firewalld is started (if you use it)
+  service:
+    name: firewalld
+    state: started
+    enabled: true
+
+# Create dedicated service user (no shell, no home), as in the guide
+# (guide uses: adduser -M -r -s /sbin/nologin node_exporter)
+# Ref: create a user before creating service. :contentReference[oaicite:1]{index=1}
+- name: Create node_exporter system user
+  user:
+    name: "{{ node_exporter_user }}"
+    shell: /sbin/nologin
+    create_home: false
+    system: true
+
+- name: Create temp dir for download
+  file:
+    path: /tmp/node_exporter_{{ node_exporter_version }}
+    state: directory
+    mode: "0755"
+
+- name: Download node_exporter tarball
+  get_url:
+    url: "{{ node_exporter_download_url }}"
+    dest: "/tmp/node_exporter_{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+    mode: "0644"
+    checksum: "{{ node_exporter_tarball_checksum | default(omit) }}"
+
+- name: Unarchive node_exporter
+  unarchive:
+    src: "/tmp/node_exporter_{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+    dest: "/tmp/node_exporter_{{ node_exporter_version }}"
+    remote_src: true
+    creates: "/tmp/node_exporter_{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}"
+
+# The guide moves the binary to /usr/local/bin. :contentReference[oaicite:2]{index=2}
+- name: Install node_exporter binary
+  copy:
+    src: "/tmp/node_exporter_{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}/node_exporter"
+    dest: "{{ node_exporter_bin_dir }}/node_exporter"
+    mode: "0755"
+    owner: root
+    group: root
+
+# Service unit mirrors the blog’s unit (simple service, runs as node_exporter). :contentReference[oaicite:3]{index=3}
+- name: Install systemd unit
+  template:
+    src: "node_exporter.service.j2"
+    dest: "/etc/systemd/system/node_exporter.service"
+    mode: "0644"
+  notify:
+    - systemd daemon-reload
+    - restart node_exporter
+
+# Open TCP/9100 in firewalld, as shown in the guide. :contentReference[oaicite:4]{index=4}
+- name: Open port 9100/tcp in firewalld
+  ansible.posix.firewalld:
+    port: "{{ node_exporter_listen_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+
+# Enable and start service (guide uses systemctl enable --now node_exporter). :contentReference[oaicite:5]{index=5}
+- name: Ensure node_exporter service is enabled and running
+  service:
+    name: node_exporter
+    state: started
+    enabled: true
+
+# Verify it is listening, as the guide checks ss and /metrics. :contentReference[oaicite:6]{index=6}
+- name: Wait for node_exporter to listen on {{ node_exporter_listen_port }}
+  wait_for:
+    host: "127.0.0.1"
+    port: "{{ node_exporter_listen_port }}"
+    timeout: 30
+
+roles/node_exporter/handlers/main.yml
+---
+- name: systemd daemon-reload
+  command: systemctl daemon-reload
+
+- name: restart node_exporter
+  service:
+    name: node_exporter
+    state: restarted
+
+roles/node_exporter/templates/node_exporter.service.j2
+[Unit]
+Description=Node Exporter
+After=network.target
+
+[Service]
+User={{ node_exporter_user }}
+Group={{ node_exporter_group }}
+Type=simple
+ExecStart={{ node_exporter_bin_dir }}/node_exporter {{ node_exporter_extra_flags }}
+
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+
+How this maps to the article
+
+Create a dedicated user and run as a simple systemd service. 
+Liquid Web
+
+Download release tarball, extract, and place the binary in /usr/local/bin. 
+Liquid Web
+
+Enable & start the systemd unit and verify it’s listening on :9100. 
+Liquid Web
+
+Open port 9100/tcp in firewalld. 
+Liquid Web
+
+You can confirm metrics at http://<host>:9100/metrics. 
+Liquid Web
+
+Notes / options
+
+If you prefer a newer Node Exporter, just bump node_exporter_version in defaults/main.yml.
+
+For air-gapped, mirror the tarball to an internal repo and adjust node_exporter_download_url.
+
+SELinux: Node Exporter binding to 9100 as its own service usually needs no SELinux changes on RHEL 8.
