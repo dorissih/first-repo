@@ -177,4 +177,5 @@ If you prefer a newer Node Exporter, just bump node_exporter_version in defaults
 
 For air-gapped, mirror the tarball to an internal repo and adjust node_exporter_download_url.
 
-SELinux: Node Exporter binding to 9100 as its own service usually needs no SELinux changes on RHEL 8.
+SELinux: Node Exporter binding to 9100 as its own service usually needs no SELinux changes on RHEL https://medium.com/techbeatly/how-to-import-existing-vmware-vms-into-terraform-ad1f847fd884
+
