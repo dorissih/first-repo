@@ -1,0 +1,503 @@
+I’ll show you how to:
+
+Enable the JWT auth method in Vault
+
+Tell Vault how to verify the JWT (public key / JWKS / OIDC-style issuer)
+
+Create a Vault role that maps a JWT claim → Vault policies
+
+Test it with curl
+
+Mention how this works in an air-gapped setup
+
+I’ll use CLI + curl so you can drop it in scripts.
+
+1. Prereqs / what Vault needs
+
+For Vault to trust a JWT, it needs one of these:
+
+A JWKS URL (what you get from Keycloak, GitLab, Okta, etc.)
+
+OR a public key (PEM) that matches the private key used to sign the JWT
+
+OR an OIDC-style issuer (iss) + JWKS
+
+In an air-gapped environment you usually don’t want Vault to reach out to the IdP over the internet, so you either:
+
+host the JWKS internally, or
+
+paste the public key directly into Vault.
+
+I’ll show both.
+
+2. Enable the JWT auth method
+vault auth enable jwt
+
+
+If it’s already enabled, you’ll get an error — that’s fine.
+
+This creates: auth/jwt/
+
+3. Configure the JWT auth method
+Option A — you have an internal JWKS endpoint
+
+(Example: https://keycloak.internal.lan/realms/dev/protocol/openid-connect/certs)
+
+vault write auth/jwt/config \
+  oidc_discovery_url="https://keycloak.internal.lan/realms/dev" \
+  default_role="default"
+
+
+Vault will discover the JWKS under that issuer.
+
+Option B — air-gapped, use a static public key
+
+If your app/team can hand you the public key (the one that matches the private key that signs tokens), do this:
+
+Save it as jwt-pubkey.pem (PEM format, like -----BEGIN PUBLIC KEY-----).
+
+Configure Vault:
+
+vault write auth/jwt/config \
+  jwt_validation_pubkeys=@jwt-pubkey.pem \
+  default_role="default"
+
+
+This tells Vault: “verify any incoming JWT with this key.”
+
+4. Create a Vault policy (what the user can do)
+
+Example policy dev-read-secrets.hcl:
+
+path "secret/data/dev/*" {
+  capabilities = ["read", "list"]
+}
+
+
+Load it:
+
+vault policy write dev-read-secrets dev-read-secrets.hcl
+
+5. Create a JWT role
+
+This is the important part. The role tells Vault:
+
+what aud to expect
+
+what iss to expect (optional if you configured it above)
+
+what claim to look at (email, sub, groups, etc.)
+
+what Vault policies to give
+
+Let’s say your JWTs look like this:
+
+{
+  "iss": "https://keycloak.internal.lan/realms/dev",
+  "aud": "vault",
+  "sub": "doris@example.com",
+  "email": "doris@example.com",
+  "groups": ["devops", "security"]
+}
+
+
+You can create a role that matches on aud=vault and gives the policy:
+
+vault write auth/jwt/role/devops-role \
+  role_type="jwt" \
+  user_claim="email" \
+  bound_audiences="vault" \
+  bound_issuer="https://keycloak.internal.lan/realms/dev" \
+  policies="dev-read-secrets" \
+  ttl="1h"
+
+
+What this means:
+
+role_type=jwt → we’re using raw JWT, not full OIDC login flow
+
+user_claim=email → Vault will treat the email from the token as the username
+
+bound_audiences=vault → token must have "aud": "vault"
+
+bound_issuer=... → token must come from this issuer
+
+policies=... → what Vault lets this JWT do
+
+ttl=1h → lease for the Vault token Vault will issue
+
+If your token has groups and you want to match on that, you can add:
+
+  claim_mappings=groups:groups
+
+
+or use bound_claims, e.g.:
+
+vault write auth/jwt/role/devops-role \
+  role_type="jwt" \
+  user_claim="email" \
+  bound_audiences="vault" \
+  bound_issuer="https://keycloak.internal.lan/realms/dev" \
+  bound_claims='{"groups": ["devops"]}' \
+  policies="dev-read-secrets" \
+  ttl="1h"
+
+
+Now only JWTs whose groups contains devops will work.
+
+6. Test with a real JWT
+
+Assume you already have a JWT in $JWT (maybe from Keycloak, GitLab CI, or your app):
+
+JWT="$(cat mytoken.jwt)"
+
+
+Call Vault’s login endpoint:
+
+curl -s \
+  --request POST \
+  --data "{\"role\": \"devops-role\", \"jwt\": \"$JWT\"}" \
+  http://127.0.0.1:8200/v1/auth/jwt/login
+
+
+You should get back something like:
+
+{
+  "auth": {
+    "client_token": "hvs.CAESIG2t....",
+    "policies": ["default", "dev-read-secrets"],
+    "lease_duration": 3600,
+    "renewable": true
+  }
+}
+
+
+That client_token is your Vault token. Use it like:
+
+VAULT_TOKEN="hvs.CAESIG2t...."
+curl -H "X-Vault-Token: $VAULT_TOKEN" \
+  http://127.0.0.1:8200/v1/secret/data/dev/app1
+
+
+If you get permission denied, check:
+
+JWT aud matches bound_audiences
+
+JWT iss matches bound_issuer
+
+JWT is not expired
+
+Policy actually allows the path
+
+7. Using this in CI (GitLab / GitHub / K8s)
+
+GitLab CI: GitLab can issue a JWT to the job (CI_JOB_JWT_V2). You just pass that token to Vault at job time and log in with the role that matches aud / iss.
+
+Kubernetes: You can do the same with the Kubernetes auth method, but if you’re already issuing service-account JWTs and don’t want the k8s auth method, this JWT method works too — just point Vault to the cluster’s public key.
+
+Air-gapped: don’t use oidc_discovery_url to the internet. Either host your IdP internally or paste the public key.
+
+8. Security notes (the important parts)
+
+Keep Vault over HTTPS (TLS) — JWTs are bearer tokens. If someone sniffs them, they can log in.
+
+Keep Vault tokens short-lived (ttl=1h or less).
+
+Use bound_audiences and bound_issuer. These two stop most “I found a JWT somewhere” abuses.
+
+If your signer rotates keys, refresh jwt_validation_pubkeys (or point to JWKS if you can).
+
+Full example (copy/paste)
+# 1) enable
+vault auth enable jwt
+
+# 2) configure with static public key
+vault write auth/jwt/config \
+  jwt_validation_pubkeys=@jwt-pubkey.pem \
+  default_role="devops-role"
+
+# 3) policy
+cat > dev-read-secrets.hcl <<'EOF'
+path "secret/data/dev/*" {
+  capabilities = ["read", "list"]
+}
+EOF
+
+vault policy write dev-read-secrets dev-read-secrets.hcl
+
+# 4) role
+vault write auth/jwt/role/devops-role \
+  role_type="jwt" \
+  user_claim="email" \
+  bound_audiences="vault" \
+  bound_issuer="https://keycloak.internal.lan/realms/dev" \
+  policies="dev-read-secrets" \
+  ttl="1h"
+
+
+Then log in with your JWT.
+
+
+Got it — you want Vault to trust only the JWT that GitLab gives to the job, check the important GitLab claims (like project_path and ref), and then issue a short-lived Vault token that can read just the secrets for that project/branch.
+
+Let’s wire that up.
+
+I’ll show you:
+
+What GitLab gives you
+
+How to configure Vault’s JWT auth for GitLab
+
+How to lock it down by project and branch (project_path, ref)
+
+How to issue a short-lived Vault token
+
+What to put in .gitlab-ci.yml
+
+1. What GitLab gives you
+
+In the job, GitLab can expose a JWT (usually via CI_JOB_JWT or CI_JOB_JWT_V2 depending on your setup). That token usually has claims like:
+
+{
+  "iss": "https://gitlab.internal.lan",
+  "sub": "job_12345",
+  "aud": "https://vault.internal.lan",
+  "project_path": "underrock/platform/api",
+  "ref": "main",
+  "ref_type": "branch",
+  "namespace_id": "42"
+}
+
+
+These four are the ones you said you care about:
+
+sub → it’s a GitLab job
+
+aud → must match what we tell Vault
+
+project_path → which project/pipeline this is
+
+ref → which branch/tag
+
+We’re going to make Vault reject the login if any of these don’t match.
+
+2. Enable + configure JWT in Vault
+vault auth enable jwt
+
+
+Now tell Vault how to verify GitLab’s tokens.
+
+If your GitLab is internal and has an OIDC/JWKS endpoint:
+
+vault write auth/jwt/config \
+  oidc_discovery_url="https://gitlab.internal.lan" \
+  default_role="gitlab-ci"
+
+
+If Vault can’t reach GitLab (air-gapped), export the GitLab JWKS/public key and give it to Vault:
+
+vault write auth/jwt/config \
+  jwt_validation_pubkeys=@gitlab-jwks.pem \
+  default_role="gitlab-ci"
+
+
+Key point: Vault must be able to cryptographically verify the GitLab token. That’s the root of the trust.
+
+3. Create a policy for that project
+
+Say this project should only read:
+
+secret/data/gitlab/underrock/platform/api/*
+
+Create a policy:
+
+# gitlab-underrock-platform-api.hcl
+path "secret/data/gitlab/underrock/platform/api/*" {
+  capabilities = ["read"]
+}
+
+
+Load it:
+
+vault policy write gitlab-underrock-platform-api gitlab-underrock-platform-api.hcl
+
+4. Create the Vault JWT role with bound claims
+
+Here’s the important part. We’ll tell Vault:
+
+accept JWTs only from your GitLab (bound_issuer)
+
+accept JWTs with this audience (bound_audiences)
+
+accept JWTs only when project_path matches your GitLab project
+
+accept JWTs only when ref is the branch you want (e.g. main)
+
+issue only a short-lived Vault token
+
+vault write auth/jwt/role/gitlab-underrock-platform-api \
+  role_type="jwt" \
+  bound_issuer="https://gitlab.internal.lan" \
+  bound_audiences="https://vault.internal.lan" \
+  user_claim="sub" \
+  bound_claims='{
+    "project_path": "underrock/platform/api",
+    "ref": "main"
+  }' \
+  policies="gitlab-underrock-platform-api" \
+  ttl="600s"
+
+
+What this does:
+
+If the GitLab job is from a different repo → denied
+
+If the job runs on a different branch → denied
+
+If someone copies the JWT but changes aud → denied
+
+Vault token lifetime = 10 minutes (you can go 300s / 900s depending on job length)
+
+You can also add a namespace/org check if you like:
+
+  bound_claims_type="string"
+
+
+or add:
+
+  claim_mappings="project_path:project_path"
+
+
+but for your use case, the strict bound_claims is enough.
+
+5. Test with curl
+
+Assume the GitLab job token is in $CI_JOB_JWT_V2. Locally you can simulate:
+
+JWT="$(cat gitlab-job.jwt)"
+
+curl -s \
+  --request POST \
+  --data "{\"role\": \"gitlab-underrock-platform-api\", \"jwt\": \"$JWT\"}" \
+  http://127.0.0.1:8200/v1/auth/jwt/login
+
+
+You should get:
+
+{
+  "auth": {
+    "client_token": "hvs.xxxxx",
+    "policies": ["default", "gitlab-underrock-platform-api"],
+    "lease_duration": 600,
+    "renewable": true
+  }
+}
+
+
+That client_token is what your CI job will export and use for the rest of the steps.
+
+6. GitLab CI example
+
+Here’s a minimal .gitlab-ci.yml that:
+
+grabs Vault token using the job’s JWT
+
+reads the secret
+
+fails if claims don’t match (Vault will 403)
+
+stages:
+  - build
+
+build:
+  stage: build
+  image: alpine:3.19
+  script:
+    - apk add --no-cache curl jq
+
+    # 1) login to Vault using GitLab's JWT
+    - |
+      VAULT_ADDR="https://vault.internal.lan"
+      VAULT_ROLE="gitlab-underrock-platform-api"
+      LOGIN_RESP=$(curl -s --request POST \
+        --data "{\"role\": \"${VAULT_ROLE}\", \"jwt\": \"${CI_JOB_JWT_V2}\"}" \
+        "${VAULT_ADDR}/v1/auth/jwt/login")
+
+      # exit if error
+      echo "$LOGIN_RESP" | jq -e '.auth.client_token' >/dev/null || {
+        echo "Vault login failed:"
+        echo "$LOGIN_RESP"
+        exit 1
+      }
+
+      VAULT_TOKEN=$(echo "$LOGIN_RESP" | jq -r '.auth.client_token')
+
+    # 2) read a secret in that project scope
+    - |
+      SECRET_RESP=$(curl -s \
+        -H "X-Vault-Token: ${VAULT_TOKEN}" \
+        "${VAULT_ADDR}/v1/secret/data/gitlab/underrock/platform/api/app-config")
+
+      echo "$SECRET_RESP" | jq -e '.data.data' >/dev/null || {
+        echo "Failed to read secret"
+        echo "$SECRET_RESP"
+        exit 1
+      }
+
+      # extract real values
+      APP_KEY=$(echo "$SECRET_RESP" | jq -r '.data.data.APP_KEY')
+      echo "Got APP_KEY (redacted)"
+
+    # continue build using APP_KEY...
+
+
+Why this is secure:
+
+The job never stores a long-lived Vault token.
+
+If someone replays the same GitLab JWT from another project or branch, Vault will reject it because of bound_claims.
+
+Vault token lifetime is tiny (10 min).
+
+7. Variants
+
+Multiple branches
+If you want to allow main and release/*, make the role less strict and add another role for release:
+
+vault write auth/jwt/role/gitlab-underrock-platform-api-release \
+  role_type="jwt" \
+  bound_issuer="https://gitlab.internal.lan" \
+  bound_audiences="https://vault.internal.lan" \
+  user_claim="sub" \
+  bound_claims='{
+    "project_path": "underrock/platform/api",
+    "ref_type": "branch"
+  }' \
+  policies="gitlab-underrock-platform-api" \
+  ttl="600s"
+
+
+Then in CI pick the role based on $CI_COMMIT_REF_NAME.
+
+Per-project secrets
+Just create one policy + one role per project and bind to project_path.
+
+8. What you said you wanted to guarantee
+
+“access to secrets should only be granted if the claims are valid and authorized”
+
+You already have it with this combo:
+
+Vault JWT config → proves the token was signed by GitLab
+
+bound_issuer + bound_audiences → proves the token was actually meant for Vault
+
+bound_claims on project_path + ref → proves it’s the right project/branch
+
+Policy → limits what can be read
+
+Short ttl → makes the resulting Vault token short-lived
+
+That’s the standard, clean setup for “GitLab → Vault” using JWT.
+
+If you tell me your exact GitLab claim names (sometimes self-managed GitLab / older versions differ a bit), I can tweak the bound_claims JSON to match 1:1.
