@@ -3,3 +3,24 @@ I worked with [Employee Name] on several automation-related tasks, mainly around
 They also asked good clarifying questions before making changes, which helped us avoid rework. I appreciated that they were willing to take ownership of the Windows 11 image work and move it forward.
 
 One area that could make them even more effective is communicating status a bit more proactively (for example, brief updates when a task is blocked or when they are testing a new approach), so the rest of the team knows where things stand.
+
+import json, sys, base64
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+
+with open("jwks.json") as f:
+    jwks = json.load(f)
+
+jwk = jwks["keys"][0]  # pick first key
+n = int.from_bytes(base64.urlsafe_b64decode(jwk["n"] + "=="), "big")
+e = int.from_bytes(base64.urlsafe_b64decode(jwk["e"] + "=="), "big")
+
+pub_numbers = rsa.RSAPublicNumbers(e, n)
+pub_key = pub_numbers.public_key()
+
+pem = pub_key.public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+)
+
+sys.stdout.buffer.write(pem)
