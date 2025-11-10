@@ -1,5 +1,7 @@
 I’ll show you how to:
 
+https://medium.com/@martin.soon.ng/cicd-secrets-integration-with-jwt-and-hashicorp-vault-2dbf9fade2aa
+
 Enable the JWT auth method in Vault
 
 Tell Vault how to verify the JWT (public key / JWKS / OIDC-style issuer)
