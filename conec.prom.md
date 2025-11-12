@@ -479,3 +479,49 @@ Exporter not picking up metrics: Confirm the textfile directory exactly matches 
 TLS or path issues: Adjust $VdmBin if Horizon is installed in a non-default path.
 
 If you want, tell me your exact Horizon version and whether you already have windows_exporter installed, and I’ll tweak the script/paths to match your environment.
+
+
+Yep—that’s expected. On newer installs the CLI isn’t in ...\Server\bin. It lives under ...\Server\tools\bin (and with the Omnissa rebrand some folder names changed).
+
+Quick ways to find it
+
+PowerShell (fastest):
+
+# Search typical locations
+$paths = @(
+  "C:\Program Files\VMware\VMware View\Server\tools\bin",
+  "C:\Program Files\View\Server\tools\bin",
+  "C:\Program Files\Omnissa\Horizon Connection Server\tools\bin"
+)
+Get-ChildItem -Path $paths -Filter vdmadmin.exe -ErrorAction SilentlyContinue
+
+# Or search the disk (slower)
+Get-ChildItem -Path 'C:\Program Files' -Recurse -Filter vdmadmin.exe -ErrorAction SilentlyContinue
+
+
+If you see it (e.g., C:\Program Files\VMware\VMware View\Server\tools\bin\vdmadmin.exe), run your health checks from there:
+
+cd "C:\Program Files\VMware\VMware View\Server\tools\bin"
+.\vdmadmin.exe -H -list
+.\vdmadmin.exe -H -display -monitor "Event Database"
+
+Why the mismatch?
+
+Official docs show the default path is ...\Server\tools\bin, not ...\Server\bin. 
+docs.omnissa.com
++1
+
+With Omnissa 2412+, many “VMware” paths were renamed to “Omnissa”, so your install might be under an Omnissa folder. 
+techzone.omnissa.com
++1
+
+If it’s still missing
+
+Confirm you’re on a Connection Server (not just an Agent or UAG).
+
+Make sure you installed the Admin/Connection Server component that includes tools.
+
+Cross-check the doc page “Using the vdmadmin Command” to confirm availability for your version. 
+docs.omnissa.com
+
+Want me to tweak the Prometheus script to auto-detect vdmadmin.exe and cache the path it finds?
